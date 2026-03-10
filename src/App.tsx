@@ -15,14 +15,45 @@ import {
   eachDayOfInterval,
   parseISO
 } from 'date-fns';
-import { ChevronLeft, ChevronRight, Plus, FlaskConical, Beaker, ClipboardList, BrainCircuit, Settings, Info, ArrowRight, FolderKanban, BookOpen, Trash2, Edit3, CheckCircle2, XCircle, Menu, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, FlaskConical, Beaker, ClipboardList, BrainCircuit, Settings, Info, ArrowRight, FolderKanban, BookOpen, Trash2, Edit3, CheckCircle2, XCircle, Menu, X, LogIn, LogOut, User } from 'lucide-react';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
 import { cn } from './lib/utils';
 import { Experiment, Template, ExperimentStep, Record as ExpRecord, Project, ProjectArgument } from './types';
 import Markdown from 'react-markdown';
-import { io } from 'socket.io-client';
+import { db, auth, signInWithGoogle } from './firebase';
+import { collection, onSnapshot, query, orderBy, addDoc, updateDoc, deleteDoc, doc, getDoc, setDoc, where, Timestamp, getDocs, limit } from 'firebase/firestore';
+import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
+import * as gemini from './services/geminiService';
 
 // --- Components ---
+
+const ConfirmModal = ({ isOpen, title, message, onConfirm, onCancel }: { isOpen: boolean, title: string, message: string, onConfirm: () => void, onCancel: () => void }) => {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+      <motion.div 
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        className="bg-white w-full max-w-sm rounded-3xl shadow-2xl p-8"
+      >
+        <h3 className="text-xl font-bold mb-2">{title}</h3>
+        <p className="text-zinc-500 text-sm mb-6">{message}</p>
+        <div className="flex gap-3">
+          <button onClick={onCancel} className="flex-1 py-3 rounded-xl border border-zinc-200 font-medium hover:bg-zinc-50 transition-all">Cancel</button>
+          <button 
+            onClick={() => {
+              onConfirm();
+              onCancel();
+            }} 
+            className="flex-1 py-3 rounded-xl bg-red-600 text-white font-medium hover:bg-red-700 transition-all shadow-lg"
+          >
+            Delete
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
 
 const SidebarItem = ({ icon: Icon, label, active, onClick }: { icon: any, label: string, active: boolean, onClick: () => void }) => (
   <button
@@ -49,50 +80,49 @@ export default function App() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
-  const [preSelectedTemplateId, setPreSelectedTemplateId] = useState<number | null>(null);
-  const [selectedExperimentId, setSelectedExperimentId] = useState<number | null>(null);
-  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
+  const [preSelectedTemplateId, setPreSelectedTemplateId] = useState<string | null>(null);
+  const [selectedExperimentId, setSelectedExperimentId] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const socketRef = useRef<any>(null);
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
 
   useEffect(() => {
-    fetchExperiments();
-    fetchTemplates();
-    fetchProjects();
+    const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setIsAuthReady(true);
+    });
 
-    // Socket initialization
-    socketRef.current = io();
-    socketRef.current.on('data_changed', () => {
-      console.log('Data changed remotely, refreshing...');
-      fetchExperiments();
-      fetchTemplates();
-      fetchProjects();
+    return () => unsubscribeAuth();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    // Real-time listeners
+    const qExperiments = query(collection(db, 'experiments'), orderBy('start_date', 'desc'));
+    const unsubscribeExperiments = onSnapshot(qExperiments, (snapshot) => {
+      setExperiments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)));
+    });
+
+    const qTemplates = query(collection(db, 'templates'), orderBy('name', 'asc'));
+    const unsubscribeTemplates = onSnapshot(qTemplates, (snapshot) => {
+      setTemplates(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)));
+    });
+
+    const qProjects = query(collection(db, 'projects'), orderBy('created_at', 'desc'));
+    const unsubscribeProjects = onSnapshot(qProjects, (snapshot) => {
+      setProjects(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)));
     });
 
     return () => {
-      if (socketRef.current) socketRef.current.disconnect();
+      unsubscribeExperiments();
+      unsubscribeTemplates();
+      unsubscribeProjects();
     };
-  }, []);
+  }, [user]);
 
-  const fetchExperiments = async () => {
-    const res = await fetch('/api/experiments');
-    const data = await res.json();
-    setExperiments(data);
-  };
-
-  const fetchTemplates = async () => {
-    const res = await fetch('/api/templates');
-    const data = await res.json();
-    setTemplates(data);
-  };
-
-  const fetchProjects = async () => {
-    const res = await fetch('/api/projects');
-    const data = await res.json();
-    setProjects(data);
-  };
-
-  const handleUseTemplate = (id: number) => {
+  const handleUseTemplate = (id: string) => {
     setPreSelectedTemplateId(id);
     setIsAddModalOpen(true);
   };
@@ -109,27 +139,50 @@ export default function App() {
         <p className="text-zinc-500 mt-1">Manage your research workflow efficiently.</p>
       </div>
       <div className="flex items-center gap-4">
-        {activeTab === 'templates' ? (
-          <button 
-            onClick={() => {
-              setEditingTemplate(null);
-              setIsTemplateModalOpen(true);
-            }}
-            className="flex items-center gap-2 bg-zinc-900 text-white px-5 py-2.5 rounded-xl hover:bg-zinc-800 transition-all shadow-md active:scale-95"
-          >
-            <Plus size={18} />
-            <span className="font-medium">New Template</span>
-          </button>
+        {user ? (
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-white border border-zinc-200 rounded-xl shadow-sm">
+              {user.photoURL ? (
+                <img src={user.photoURL} alt={user.displayName || ''} className="w-6 h-6 rounded-full" referrerPolicy="no-referrer" />
+              ) : (
+                <User size={16} className="text-zinc-400" />
+              )}
+              <span className="text-sm font-medium text-zinc-700">{user.displayName}</span>
+              <button onClick={() => signOut(auth)} className="ml-2 p-1 text-zinc-400 hover:text-red-500 transition-colors">
+                <LogOut size={16} />
+              </button>
+            </div>
+            {activeTab === 'templates' ? (
+              <button 
+                onClick={() => {
+                  setEditingTemplate(null);
+                  setIsTemplateModalOpen(true);
+                }}
+                className="flex items-center gap-2 bg-zinc-900 text-white px-5 py-2.5 rounded-xl hover:bg-zinc-800 transition-all shadow-md active:scale-95"
+              >
+                <Plus size={18} />
+                <span className="font-medium">New Template</span>
+              </button>
+            ) : (
+              <button 
+                onClick={() => {
+                  setPreSelectedTemplateId(null);
+                  setIsAddModalOpen(true);
+                }}
+                className="flex items-center gap-2 bg-zinc-900 text-white px-5 py-2.5 rounded-xl hover:bg-zinc-800 transition-all shadow-md active:scale-95"
+              >
+                <Plus size={18} />
+                <span className="font-medium">New Experiment</span>
+              </button>
+            )}
+          </div>
         ) : (
           <button 
-            onClick={() => {
-              setPreSelectedTemplateId(null);
-              setIsAddModalOpen(true);
-            }}
+            onClick={signInWithGoogle}
             className="flex items-center gap-2 bg-zinc-900 text-white px-5 py-2.5 rounded-xl hover:bg-zinc-800 transition-all shadow-md active:scale-95"
           >
-            <Plus size={18} />
-            <span className="font-medium">New Experiment</span>
+            <LogIn size={18} />
+            <span className="font-medium">Sign In with Google</span>
           </button>
         )}
       </div>
@@ -142,12 +195,7 @@ export default function App() {
     if (!experimentId) return;
 
     const newDate = format(date, 'yyyy-MM-dd');
-    await fetch(`/api/experiments/${experimentId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ start_date: newDate })
-    });
-    fetchExperiments();
+    await updateDoc(doc(db, 'experiments', experimentId), { start_date: newDate });
   };
 
   const renderCalendar = () => {
@@ -390,7 +438,7 @@ export default function App() {
                   onExperimentClick={(id) => setSelectedExperimentId(id)}
                 />
               ) : (
-                <ProjectsView onUpdate={fetchProjects} onSelectProject={setSelectedProjectId} />
+                <ProjectsView onSelectProject={setSelectedProjectId} />
               )}
             </motion.div>
           )}
@@ -430,7 +478,6 @@ export default function App() {
             setPreSelectedTemplateId(null);
           }} 
           onSuccess={() => {
-            fetchExperiments();
             setIsAddModalOpen(false);
             setPreSelectedTemplateId(null);
           }}
@@ -445,7 +492,6 @@ export default function App() {
             setEditingTemplate(null);
           }}
           onSuccess={() => {
-            fetchTemplates();
             setIsTemplateModalOpen(false);
             setEditingTemplate(null);
           }}
@@ -456,7 +502,6 @@ export default function App() {
         <ExperimentDetailModal 
           id={selectedExperimentId} 
           onClose={() => setSelectedExperimentId(null)} 
-          onUpdate={fetchExperiments}
         />
       )}
     </div>
@@ -569,79 +614,68 @@ function SampleTable({ title, initialData, onSave, onRemove }: { title: string, 
   );
 }
 
-function ProjectDetailView({ projectId, onBack, onExperimentClick }: { projectId: number, onBack: () => void, onExperimentClick: (id: number) => void }) {
+function ProjectDetailView({ projectId, onBack, onExperimentClick }: { projectId: string, onBack: () => void, onExperimentClick: (id: string) => void }) {
   const [project, setProject] = useState<Project | null>(null);
   const [arguments_, setArguments] = useState<(ProjectArgument & { experiments: Experiment[] })[]>([]);
   const [loading, setLoading] = useState(true);
-  const [editingArgId, setEditingArgId] = useState<number | null>(null);
+  const [editingArgId, setEditingArgId] = useState<string | null>(null);
   const [newPlannedExp, setNewPlannedExp] = useState('');
 
   useEffect(() => {
-    fetchData();
+    if (!projectId) return;
+    
+    const unsubscribeProject = onSnapshot(doc(db, 'projects', projectId), (docSnap) => {
+      if (docSnap.exists()) {
+        setProject({ id: docSnap.id, ...docSnap.data() } as any);
+      }
+    });
+
+    const qArgs = query(collection(db, 'project_arguments'), where('project_id', '==', projectId));
+    const unsubscribeArgs = onSnapshot(qArgs, (snapshot) => {
+      const argsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
+      
+      // We'll filter experiments locally for now or set up another listener
+      // For simplicity in this large refactor, I'll use a listener for all experiments and filter
+      const qExps = query(collection(db, 'experiments'), where('project_id', '==', projectId));
+      onSnapshot(qExps, (expSnapshot) => {
+        const exps = expSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
+        const argsWithExps = argsData.map(arg => ({
+          ...arg,
+          experiments: exps.filter(e => e.argument_id === arg.id)
+        }));
+        setArguments(argsWithExps);
+        setLoading(false);
+      });
+    });
+
+    return () => {
+      unsubscribeProject();
+      unsubscribeArgs();
+    };
   }, [projectId]);
 
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const pRes = await fetch(`/api/projects/${projectId}`);
-      const pData = await pRes.json();
-      setProject(pData);
-      
-      const argsRes = await fetch(`/api/projects/${projectId}`);
-      const argsData = await argsRes.json();
-      
-      // Fetch experiments for each argument
-      const experimentsRes = await fetch('/api/experiments');
-      const experimentsData: Experiment[] = await experimentsRes.json();
-      
-      const argsWithExps = (argsData.arguments || []).map((arg: ProjectArgument) => ({
-        ...arg,
-        experiments: experimentsData.filter(e => e.argument_id === arg.id)
-      }));
-      
-      setArguments(argsWithExps);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleAddPlannedExp = async (argId: number, currentPlanned: string | undefined) => {
+  const handleAddPlannedExp = async (argId: string, currentPlanned: string | undefined) => {
     if (!newPlannedExp) return;
     const planned = currentPlanned ? JSON.parse(currentPlanned) : [];
     const updated = JSON.stringify([...planned, { name: newPlannedExp, completed: false }]);
     
-    await fetch(`/api/project-arguments/${argId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ planned_experiments: updated })
-    });
+    await updateDoc(doc(db, 'project_arguments', argId), { planned_experiments: updated });
     setNewPlannedExp('');
     setEditingArgId(null);
-    fetchData();
   };
 
-  const togglePlannedExp = async (argId: number, currentPlanned: string | undefined, expIdx: number) => {
+  const togglePlannedExp = async (argId: string, currentPlanned: string | undefined, expIdx: number) => {
     const planned = JSON.parse(currentPlanned || '[]');
     planned[expIdx].completed = !planned[expIdx].completed;
     
-    await fetch(`/api/project-arguments/${argId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ planned_experiments: JSON.stringify(planned) })
-    });
-    fetchData();
+    await updateDoc(doc(db, 'project_arguments', argId), { planned_experiments: JSON.stringify(planned) });
   };
 
-  const removePlannedExp = async (argId: number, currentPlanned: string | undefined, expIdx: number) => {
+  const removePlannedExp = async (argId: string, currentPlanned: string | undefined, expIdx: number) => {
     const planned = JSON.parse(currentPlanned || '[]');
     const updated = planned.filter((_: any, i: number) => i !== expIdx);
     
-    await fetch(`/api/project-arguments/${argId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ planned_experiments: JSON.stringify(updated) })
-    });
-    fetchData();
+    await updateDoc(doc(db, 'project_arguments', argId), { planned_experiments: JSON.stringify(updated) });
   };
 
   if (loading || !project) return <div className="p-12 text-center text-zinc-400">Loading project details...</div>;
@@ -780,7 +814,7 @@ function ProjectDetailView({ projectId, onBack, onExperimentClick }: { projectId
   );
 }
 
-function AddResearchPointModal({ projectId, onClose, onSuccess }: { projectId: number, onClose: () => void, onSuccess: () => void }) {
+function AddResearchPointModal({ projectId, onClose }: { projectId: string, onClose: () => void }) {
   const [content, setContent] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
@@ -789,12 +823,12 @@ function AddResearchPointModal({ projectId, onClose, onSuccess }: { projectId: n
     if (!content) return;
     setIsSaving(true);
     try {
-      await fetch('/api/project-arguments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: projectId, content })
+      await addDoc(collection(db, 'project_arguments'), {
+        project_id: projectId,
+        content,
+        planned_experiments: '[]',
+        created_at: new Date().toISOString()
       });
-      onSuccess();
       onClose();
     } finally {
       setIsSaving(false);
@@ -842,7 +876,7 @@ function AddResearchPointModal({ projectId, onClose, onSuccess }: { projectId: n
   );
 }
 
-function ProjectsView({ onUpdate, onSelectProject }: { onUpdate: () => void, onSelectProject: (id: number) => void }) {
+function ProjectsView({ onSelectProject }: { onSelectProject: (id: string) => void }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
@@ -852,42 +886,38 @@ function ProjectsView({ onUpdate, onSelectProject }: { onUpdate: () => void, onS
 
   // Research Point Modal State
   const [isArgModalOpen, setIsArgModalOpen] = useState(false);
-  const [targetProjectId, setTargetProjectId] = useState<number | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [targetProjectId, setTargetProjectId] = useState<string | null>(null);
+
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchProjects();
+    const q = query(collection(db, 'projects'), orderBy('created_at', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setProjects(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)));
+    });
+    return () => unsubscribe();
   }, []);
-
-  const fetchProjects = async () => {
-    const res = await fetch('/api/projects');
-    const data = await res.json();
-    setProjects(data);
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const method = editingProject ? 'PATCH' : 'POST';
-    const url = editingProject ? `/api/projects/${editingProject.id}` : '/api/projects';
-    await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, description, color })
-    });
+    if (editingProject) {
+      await updateDoc(doc(db, 'projects', editingProject.id), { name, description, color });
+    } else {
+      await addDoc(collection(db, 'projects'), {
+        name,
+        description,
+        color,
+        created_at: new Date().toISOString()
+      });
+    }
     setIsModalOpen(false);
     setEditingProject(null);
     setName('');
     setDescription('');
-    fetchProjects();
-    onUpdate();
   };
 
-  const handleDelete = async (id: number) => {
-    if (confirm('Delete this project?')) {
-      await fetch(`/api/projects/${id}`, { method: 'DELETE' });
-      fetchProjects();
-      onUpdate();
-    }
+  const handleDelete = async (id: string) => {
+    await deleteDoc(doc(db, 'projects', id));
   };
 
   return (
@@ -936,7 +966,7 @@ function ProjectsView({ onUpdate, onSelectProject }: { onUpdate: () => void, onS
                 <button 
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleDelete(project.id);
+                    setDeleteConfirmId(project.id);
                   }}
                   className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
                 >
@@ -959,7 +989,7 @@ function ProjectsView({ onUpdate, onSelectProject }: { onUpdate: () => void, onS
               Add Research Point
             </button>
 
-            <ProjectArgumentsList projectId={project.id} refreshTrigger={refreshKey} />
+            <ProjectArgumentsList projectId={project.id} />
           </div>
         ))}
       </div>
@@ -968,7 +998,6 @@ function ProjectsView({ onUpdate, onSelectProject }: { onUpdate: () => void, onS
         <AddResearchPointModal 
           projectId={targetProjectId} 
           onClose={() => setIsArgModalOpen(false)} 
-          onSuccess={() => setRefreshKey(prev => prev + 1)}
         />
       )}
 
@@ -997,40 +1026,45 @@ function ProjectsView({ onUpdate, onSelectProject }: { onUpdate: () => void, onS
           </motion.div>
         </div>
       )}
+
+      <ConfirmModal 
+        isOpen={!!deleteConfirmId}
+        title="Delete Project"
+        message="Are you sure you want to delete this project? This action cannot be undone."
+        onConfirm={() => deleteConfirmId && handleDelete(deleteConfirmId)}
+        onCancel={() => setDeleteConfirmId(null)}
+      />
     </div>
   );
 }
 
-function ProjectArgumentsList({ projectId, refreshTrigger }: { projectId: number, refreshTrigger?: number }) {
+function ProjectArgumentsList({ projectId }: { projectId: string }) {
   const [arguments_, setArguments] = useState<ProjectArgument[]>([]);
   const [newArg, setNewArg] = useState('');
   const [isAdding, setIsAdding] = useState(false);
 
   useEffect(() => {
-    fetchArguments();
-  }, [projectId, refreshTrigger]);
-
-  const fetchArguments = async () => {
-    const res = await fetch(`/api/projects/${projectId}`);
-    const data = await res.json();
-    setArguments(data.arguments || []);
-  };
+    const q = query(collection(db, 'project_arguments'), where('project_id', '==', projectId), orderBy('created_at', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setArguments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)));
+    });
+    return () => unsubscribe();
+  }, [projectId]);
 
   const handleAdd = async () => {
     if (!newArg) return;
-    await fetch('/api/project-arguments', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project_id: projectId, content: newArg })
+    await addDoc(collection(db, 'project_arguments'), {
+      project_id: projectId,
+      content: newArg,
+      planned_experiments: '[]',
+      created_at: new Date().toISOString()
     });
     setNewArg('');
     setIsAdding(false);
-    fetchArguments();
   };
 
-  const handleDelete = async (id: number) => {
-    await fetch(`/api/project-arguments/${id}`, { method: 'DELETE' });
-    fetchArguments();
+  const handleDelete = async (id: string) => {
+    await deleteDoc(doc(db, 'project_arguments', id));
   };
 
   return (
@@ -1072,24 +1106,33 @@ function ProjectArgumentsList({ projectId, refreshTrigger }: { projectId: number
 
 function RecordsView() {
   const [records, setRecords] = useState<(ExpRecord & { experiment_name: string, start_date: string, color: string })[]>([]);
-
-  const fetchRecords = () => {
-    fetch('/api/records')
-      .then(res => res.json())
-      .then(data => setRecords(data));
-  };
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchRecords();
+    const q = query(collection(db, 'records'));
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      const recordsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
+      
+      // Fetch experiment details for each record
+      // In a real app, we might denormalize this or use a more efficient way
+      const enrichedRecords = await Promise.all(recordsData.map(async (record) => {
+        const expDoc = await getDoc(doc(db, 'experiments', record.experiment_id));
+        const expData = expDoc.data();
+        return {
+          ...record,
+          experiment_name: expData?.name || 'Unknown Experiment',
+          start_date: expData?.start_date || new Date().toISOString(),
+          color: expData?.color || '#3b82f6'
+        };
+      }));
+      
+      setRecords(enrichedRecords.sort((a, b) => b.start_date.localeCompare(a.start_date)));
+    });
+    return () => unsubscribe();
   }, []);
 
-  const handleDeleteRecord = async (recordId: number) => {
-    if (confirm('Are you sure you want to delete this record? The experiment itself will remain.')) {
-      const res = await fetch(`/api/records/${recordId}`, { method: 'DELETE' });
-      if (res.ok) {
-        fetchRecords();
-      }
-    }
+  const handleDeleteRecord = async (recordId: string) => {
+    await deleteDoc(doc(db, 'records', recordId));
   };
 
   return (
@@ -1118,7 +1161,7 @@ function RecordsView() {
                     Record #{record.id}
                   </div>
                   <button 
-                    onClick={() => handleDeleteRecord(record.id)}
+                    onClick={() => setDeleteConfirmId(record.id)}
                     className="p-2 text-zinc-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
                     title="Delete Record"
                   >
@@ -1145,28 +1188,44 @@ function RecordsView() {
           ))
         )}
       </div>
+
+      <ConfirmModal 
+        isOpen={!!deleteConfirmId}
+        title="Delete Record"
+        message="Are you sure you want to delete this record? The experiment itself will remain."
+        onConfirm={() => deleteConfirmId && handleDeleteRecord(deleteConfirmId)}
+        onCancel={() => setDeleteConfirmId(null)}
+      />
     </div>
   );
 }
 
-function AddExperimentModal({ templates, initialTemplateId, onClose, onSuccess }: { templates: Template[], initialTemplateId?: number | null, onClose: () => void, onSuccess: () => void }) {
+function AddExperimentModal({ templates, initialTemplateId, onClose, onSuccess }: { templates: Template[], initialTemplateId?: string | null, onClose: () => void, onSuccess: () => void }) {
   const [name, setName] = useState('');
-  const [templateId, setTemplateId] = useState<number | ''>(initialTemplateId || '');
+  const [templateId, setTemplateId] = useState<string | ''>(initialTemplateId || '');
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [color, setColor] = useState('#3b82f6');
-  const [projectId, setProjectId] = useState<number | ''>('');
-  const [argumentId, setArgumentId] = useState<number | ''>('');
+  const [projectId, setProjectId] = useState<string | ''>('');
+  const [argumentId, setArgumentId] = useState<string | ''>('');
   const [projects, setProjects] = useState<Project[]>([]);
   const [arguments_, setArguments] = useState<ProjectArgument[]>([]);
   const [steps, setSteps] = useState<{ day_offset: number, description: string, notes: string | null }[]>([]);
 
   useEffect(() => {
-    fetch('/api/projects').then(res => res.json()).then(setProjects);
+    const q = query(collection(db, 'projects'), orderBy('name', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setProjects(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)));
+    });
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
     if (projectId) {
-      fetch(`/api/projects/${projectId}`).then(res => res.json()).then(data => setArguments(data.arguments || []));
+      const q = query(collection(db, 'project_arguments'), where('project_id', '==', projectId));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        setArguments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)));
+      });
+      return () => unsubscribe();
     } else {
       setArguments([]);
       setArgumentId('');
@@ -1179,20 +1238,23 @@ function AddExperimentModal({ templates, initialTemplateId, onClose, onSuccess }
       const t = templates.find(t => t.id === initialTemplateId);
       if (t) {
         setColor(t.color);
-        fetch(`/api/templates/${t.id}/steps`).then(res => res.json()).then(setSteps);
+        const q = query(collection(db, 'template_steps'), where('template_id', '==', t.id), orderBy('step_order', 'asc'));
+        getDocs(q).then(snapshot => {
+          setSteps(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as any)));
+        });
       }
     }
   }, [initialTemplateId, templates]);
 
-  const handleTemplateChange = async (id: number | '') => {
+  const handleTemplateChange = async (id: string | '') => {
     setTemplateId(id);
     if (id) {
       const t = templates.find(t => t.id === id);
       if (t) {
         setColor(t.color);
-        const res = await fetch(`/api/templates/${id}/steps`);
-        const data = await res.json();
-        setSteps(data);
+        const q = query(collection(db, 'template_steps'), where('template_id', '==', id), orderBy('step_order', 'asc'));
+        const snapshot = await getDocs(q);
+        setSteps(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as any)));
       }
     } else {
       setSteps([]);
@@ -1201,20 +1263,28 @@ function AddExperimentModal({ templates, initialTemplateId, onClose, onSuccess }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await fetch('/api/experiments', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        name, 
-        template_id: templateId || null, 
-        start_date: date, 
-        color,
-        project_id: projectId || null,
-        argument_id: argumentId || null,
-        steps: steps.length > 0 ? steps : null
-      })
+    const expRef = await addDoc(collection(db, 'experiments'), {
+      name,
+      template_id: templateId || null,
+      start_date: date,
+      color,
+      project_id: projectId || null,
+      argument_id: argumentId || null,
+      status: 'planned',
+      samples_json: '[]'
     });
-    if (res.ok) onSuccess();
+
+    // Add steps
+    for (let i = 0; i < steps.length; i++) {
+      await addDoc(collection(db, 'experiment_steps'), {
+        experiment_id: expRef.id,
+        ...steps[i],
+        step_order: i,
+        is_completed: false
+      });
+    }
+
+    onSuccess();
   };
 
   return (
@@ -1259,7 +1329,7 @@ function AddExperimentModal({ templates, initialTemplateId, onClose, onSuccess }
               <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Project (课题)</label>
               <select 
                 value={projectId}
-                onChange={e => setProjectId(Number(e.target.value) || '')}
+                onChange={e => setProjectId(e.target.value)}
                 className="w-full px-4 py-3 rounded-xl border border-zinc-200 outline-none"
               >
                 <option value="">None</option>
@@ -1270,7 +1340,7 @@ function AddExperimentModal({ templates, initialTemplateId, onClose, onSuccess }
               <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Research Point (论证观点)</label>
               <select 
                 value={argumentId}
-                onChange={e => setArgumentId(Number(e.target.value) || '')}
+                onChange={e => setArgumentId(e.target.value)}
                 className="w-full px-4 py-3 rounded-xl border border-zinc-200 outline-none"
                 disabled={!projectId}
               >
@@ -1285,7 +1355,7 @@ function AddExperimentModal({ templates, initialTemplateId, onClose, onSuccess }
               <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Protocol Template</label>
               <select 
                 value={templateId}
-                onChange={e => handleTemplateChange(Number(e.target.value) || '')}
+                onChange={e => handleTemplateChange(e.target.value)}
                 className="w-full px-4 py-3 rounded-xl border border-zinc-200 outline-none transition-all"
               >
                 <option value="">Manual Entry</option>
@@ -1354,17 +1424,20 @@ function TemplateModal({ template, onClose, onSuccess }: { template: Template | 
   const [type, setType] = useState(template?.type || 'Molecular');
   const [color, setColor] = useState(template?.color || '#3b82f6');
   const [description, setDescription] = useState(template?.description || '');
-  const [projectId, setProjectId] = useState<number | ''>(template?.project_id || '');
+  const [projectId, setProjectId] = useState<string | ''>(template?.project_id || '');
   const [steps, setSteps] = useState<{ day_offset: number, description: string, notes: string | null, duration_minutes: number | null }[]>([]);
   const [editingStepIndex, setEditingStepIndex] = useState<number | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const colorPresets = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#64748b'];
 
   useEffect(() => {
     if (template) {
-      fetch(`/api/templates/${template.id}/steps`)
-        .then(res => res.json())
-        .then(data => setSteps(data));
+      const q = query(collection(db, 'template_steps'), where('template_id', '==', template.id), orderBy('step_order', 'asc'));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        setSteps(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)));
+      });
+      return () => unsubscribe();
     }
   }, [template]);
 
@@ -1379,27 +1452,52 @@ function TemplateModal({ template, onClose, onSuccess }: { template: Template | 
   const [projects, setProjects] = useState<Project[]>([]);
 
   useEffect(() => {
-    fetch('/api/projects').then(res => res.json()).then(setProjects);
+    const q = query(collection(db, 'projects'), orderBy('name', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setProjects(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)));
+    });
+    return () => unsubscribe();
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const method = template ? 'PATCH' : 'POST';
-    const url = template ? `/api/templates/${template.id}` : '/api/templates';
-    const res = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, type, color, description, steps, project_id: projectId || null })
-    });
-    if (res.ok) onSuccess();
+    let templateId: string | undefined = template?.id;
+    
+    if (templateId) {
+      await updateDoc(doc(db, 'templates', templateId), { name, type, color, description, project_id: projectId || null });
+      // Delete old steps and add new ones
+      const q = query(collection(db, 'template_steps'), where('template_id', '==', templateId));
+      const snapshot = await getDocs(q);
+      for (const d of snapshot.docs) {
+        await deleteDoc(d.ref);
+      }
+    } else {
+      const templateRef = await addDoc(collection(db, 'templates'), {
+        name,
+        type,
+        color,
+        description,
+        project_id: projectId || null,
+        created_at: new Date().toISOString()
+      });
+      templateId = templateRef.id;
+    }
+
+    for (let i = 0; i < steps.length; i++) {
+      await addDoc(collection(db, 'template_steps'), {
+        template_id: templateId,
+        ...steps[i],
+        step_order: i
+      });
+    }
+
+    onSuccess();
   };
 
   const handleDelete = async () => {
     if (!template) return;
-    if (confirm('Are you sure you want to delete this template?')) {
-      const res = await fetch(`/api/templates/${template.id}`, { method: 'DELETE' });
-      if (res.ok) onSuccess();
-    }
+    await deleteDoc(doc(db, 'templates', template.id));
+    onSuccess();
   };
 
   return (
@@ -1425,7 +1523,7 @@ function TemplateModal({ template, onClose, onSuccess }: { template: Template | 
               <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Project (课题)</label>
               <select 
                 value={projectId} 
-                onChange={e => setProjectId(Number(e.target.value) || '')}
+                onChange={e => setProjectId(e.target.value)}
                 className="w-full px-4 py-3 rounded-xl border border-zinc-200 outline-none"
               >
                 <option value="">None</option>
@@ -1507,7 +1605,7 @@ function TemplateModal({ template, onClose, onSuccess }: { template: Template | 
         </form>
         <div className="p-8 border-t border-zinc-100 flex gap-3">
           {template && (
-            <button type="button" onClick={handleDelete} className="px-6 py-3 rounded-xl border border-red-100 text-red-600 font-medium hover:bg-red-50 transition-all">Delete</button>
+            <button type="button" onClick={() => setShowDeleteConfirm(true)} className="px-6 py-3 rounded-xl border border-red-100 text-red-600 font-medium hover:bg-red-50 transition-all">Delete</button>
           )}
           <div className="flex-1" />
           <button type="button" onClick={onClose} className="px-6 py-3 rounded-xl border border-zinc-200 font-medium hover:bg-zinc-50 transition-all">Cancel</button>
@@ -1515,6 +1613,14 @@ function TemplateModal({ template, onClose, onSuccess }: { template: Template | 
             {template ? 'Save Changes' : 'Create Template'}
           </button>
         </div>
+
+        <ConfirmModal 
+          isOpen={showDeleteConfirm}
+          title="Delete Template"
+          message="Are you sure you want to delete this template? This action cannot be undone."
+          onConfirm={handleDelete}
+          onCancel={() => setShowDeleteConfirm(false)}
+        />
 
         {editingStepIndex !== null && (
           <StepDetailModal 
@@ -1587,8 +1693,8 @@ function StepDetailModal({ step, onSave, onClose }: { step: any, onSave: (step: 
   );
 }
 
-function ExperimentDetailModal({ id, onClose, onUpdate }: { id: number, onClose: () => void, onUpdate: () => void }) {
-  const [data, setData] = useState<{ experiment: Experiment, steps: ExperimentStep[], record: ExpRecord } | null>(null);
+function ExperimentDetailModal({ id, onClose }: { id: string, onClose: () => void }) {
+  const [data, setData] = useState<{ experiment: Experiment, steps: ExperimentStep[], record: ExpRecord | null } | null>(null);
   const [activeTab, setActiveTab] = useState<'steps' | 'samples' | 'record'>('steps');
   const [problem, setProblem] = useState('');
   const [aiAnalysis, setAiAnalysis] = useState('');
@@ -1603,54 +1709,72 @@ function ExperimentDetailModal({ id, onClose, onUpdate }: { id: number, onClose:
   const [editName, setEditName] = useState('');
   const [editColor, setEditColor] = useState('');
   const [editDate, setEditDate] = useState('');
-  const [editProjectId, setEditProjectId] = useState<number | ''>('');
-  const [editArgumentId, setEditArgumentId] = useState<number | ''>('');
+  const [editProjectId, setEditProjectId] = useState<string | ''>('');
+  const [editArgumentId, setEditArgumentId] = useState<string | ''>('');
   const [projects, setProjects] = useState<Project[]>([]);
   const [arguments_, setArguments] = useState<ProjectArgument[]>([]);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'experiment' | 'step' | 'record', id?: string, message: string } | null>(null);
 
   useEffect(() => {
-    fetchData();
-    fetch('/api/projects').then(res => res.json()).then(setProjects);
+    const unsubExp = onSnapshot(doc(db, 'experiments', id), async (snapshot) => {
+      if (snapshot.exists()) {
+        const exp = { id: snapshot.id, ...snapshot.data() } as any as Experiment;
+        
+        // Fetch steps
+        const qSteps = query(collection(db, 'experiment_steps'), where('experiment_id', '==', id), orderBy('step_order', 'asc'));
+        const stepsSnapshot = await getDocs(qSteps);
+        const steps = stepsSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as any));
+        
+        // Fetch record
+        const qRecord = query(collection(db, 'records'), where('experiment_id', '==', id), limit(1));
+        const recordSnapshot = await getDocs(qRecord);
+        const record = recordSnapshot.docs.length > 0 ? { id: recordSnapshot.docs[0].id, ...recordSnapshot.docs[0].data() } as any : null;
+        
+        setData({ experiment: exp, steps, record });
+        setEditName(exp.name);
+        setEditColor(exp.color);
+        setEditDate(exp.start_date);
+        setEditProjectId(exp.project_id || '');
+        setEditArgumentId(exp.argument_id || '');
+        if (record) {
+          setProblem(record.results || '');
+        }
+      }
+    });
+
+    const qProjects = query(collection(db, 'projects'), orderBy('name', 'asc'));
+    const unsubProjects = onSnapshot(qProjects, (snapshot) => {
+      setProjects(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as any)));
+    });
+
+    return () => {
+      unsubExp();
+      unsubProjects();
+    };
   }, [id]);
 
   useEffect(() => {
     if (editProjectId) {
-      fetch(`/api/projects/${editProjectId}`).then(res => res.json()).then(data => setArguments(data.arguments || []));
+      const q = query(collection(db, 'project_arguments'), where('project_id', '==', editProjectId));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        setArguments(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as any)));
+      });
+      return () => unsubscribe();
     } else {
       setArguments([]);
       setEditArgumentId('');
     }
   }, [editProjectId]);
 
-  const fetchData = async () => {
-    const res = await fetch(`/api/experiments/${id}`);
-    const json = await res.json();
-    setData({ experiment: json, steps: json.steps, record: json.record });
-    setEditName(json.name);
-    setEditColor(json.color);
-    setEditDate(json.start_date);
-    setEditProjectId(json.project_id || '');
-    setEditArgumentId(json.argument_id || '');
-    if (json.record) {
-      setProblem(json.record.results || '');
-    }
-  };
-
   const handleUpdateExperiment = async () => {
-    await fetch(`/api/experiments/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        name: editName, 
-        color: editColor, 
-        start_date: editDate,
-        project_id: editProjectId || null,
-        argument_id: editArgumentId || null
-      })
+    await updateDoc(doc(db, 'experiments', id), { 
+      name: editName, 
+      color: editColor, 
+      start_date: editDate,
+      project_id: editProjectId || null,
+      argument_id: editArgumentId || null
     });
     setIsEditing(false);
-    fetchData();
-    onUpdate();
   };
 
   const handleSaveSamples = async (tableIdx: number, tableData: string) => {
@@ -1662,16 +1786,10 @@ function ExperimentDetailModal({ id, onClose, onUpdate }: { id: number, onClose:
       newSamples = [...currentSamples];
       newSamples[tableIdx] = updatedTable;
     } else {
-      // Migration for old single-table format
       newSamples = [updatedTable];
     }
 
-    await fetch(`/api/experiments/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ samples_json: JSON.stringify(newSamples) })
-    });
-    fetchData();
+    await updateDoc(doc(db, 'experiments', id), { samples_json: JSON.stringify(newSamples) });
   };
 
   const handleAddTable = async () => {
@@ -1685,95 +1803,72 @@ function ExperimentDetailModal({ id, onClose, onUpdate }: { id: number, onClose:
       newSamples = [newTable];
     }
 
-    await fetch(`/api/experiments/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ samples_json: JSON.stringify(newSamples) })
-    });
-    fetchData();
+    await updateDoc(doc(db, 'experiments', id), { samples_json: JSON.stringify(newSamples) });
   };
 
   const handleRemoveTable = async (tableIdx: number) => {
     const currentSamples = data?.experiment.samples_json ? JSON.parse(data.experiment.samples_json) : [];
     if (Array.isArray(currentSamples)) {
       const newSamples = currentSamples.filter((_, i) => i !== tableIdx);
-      await fetch(`/api/experiments/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ samples_json: JSON.stringify(newSamples) })
-      });
-      fetchData();
+      await updateDoc(doc(db, 'experiments', id), { samples_json: JSON.stringify(newSamples) });
     }
   };
 
   const handleDeleteExperiment = async () => {
-    if (confirm('Are you sure you want to delete this experiment? All progress will be lost.')) {
-      const res = await fetch(`/api/experiments/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        onUpdate();
-        onClose();
-      }
-    }
+    await deleteDoc(doc(db, 'experiments', id));
+    onClose();
   };
 
-  const toggleStep = async (stepId: number, currentStatus: number) => {
-    await fetch(`/api/experiment-steps/${stepId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ is_completed: !currentStatus })
-    });
-    fetchData();
+  const toggleStep = async (stepId: string, currentStatus: boolean) => {
+    await updateDoc(doc(db, 'experiment_steps', stepId), { is_completed: !currentStatus });
   };
 
   const handleAddStep = async () => {
     if (!newStepText) return;
-    await fetch('/api/experiment-steps', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ experiment_id: id, day_offset: newStepDay, description: newStepText })
+    await addDoc(collection(db, 'experiment_steps'), { 
+      experiment_id: id, 
+      day_offset: newStepDay, 
+      description: newStepText,
+      step_order: data?.steps.length || 0,
+      is_completed: false
     });
     setNewStepText('');
     setIsAddingStep(false);
-    fetchData();
   };
 
-  const handleDeleteStep = async (stepId: number) => {
-    if (confirm('Delete this step?')) {
-      await fetch(`/api/experiment-steps/${stepId}`, { method: 'DELETE' });
-      fetchData();
-    }
+  const handleDeleteStep = async (stepId: string) => {
+    await deleteDoc(doc(db, 'experiment_steps', stepId));
   };
 
   const handleSaveStepDetails = async (updatedStep: any) => {
-    await fetch(`/api/experiment-steps/${updatedStep.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notes: updatedStep.notes })
+    await updateDoc(doc(db, 'experiment_steps', updatedStep.id), { 
+      notes: updatedStep.notes,
+      duration_minutes: updatedStep.duration_minutes
     });
     setSelectedStepIndex(null);
-    fetchData();
   };
 
   const handleSaveRecord = async () => {
-    await fetch('/api/records', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ experiment_id: id, results: problem })
-    });
-    fetchData();
+    if (data?.record) {
+      await updateDoc(doc(db, 'records', data.record.id), { results: problem });
+    } else {
+      await addDoc(collection(db, 'records'), { 
+        experiment_id: id, 
+        results: problem,
+        created_at: new Date().toISOString()
+      });
+    }
   };
 
   const handleAnalyze = async () => {
     if (!problem) return;
     setIsAnalyzing(true);
     try {
-      const res = await fetch('/api/ai/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ problem, context: data?.experiment.name })
-      });
-      const json = await res.json();
-      setAiAnalysis(json.analysis);
+      const analysis = await gemini.analyzeExperimentProblem(problem, data?.experiment.name || "");
+      setAiAnalysis(analysis || "No analysis generated.");
+    } catch (error) {
+      console.error(error);
+      setAiAnalysis("Failed to analyze experiment problem.");
     } finally {
       setIsAnalyzing(false);
     }
@@ -1781,13 +1876,12 @@ function ExperimentDetailModal({ id, onClose, onUpdate }: { id: number, onClose:
 
   const handleDeleteRecordFromModal = async () => {
     if (!data?.record) return;
-    if (confirm('Are you sure you want to delete this record? The experiment progress will be kept.')) {
-      const res = await fetch(`/api/records/${data.record.id}`, { method: 'DELETE' });
-      if (res.ok) {
-        setProblem('');
-        setAiAnalysis('');
-        fetchData();
-      }
+    try {
+      await deleteDoc(doc(db, 'records', data.record.id));
+      setProblem('');
+      setAiAnalysis('');
+    } catch (error) {
+      console.error("Error deleting record:", error);
     }
   };
 
@@ -1819,7 +1913,7 @@ function ExperimentDetailModal({ id, onClose, onUpdate }: { id: number, onClose:
                   <input type="color" value={editColor} onChange={e => setEditColor(e.target.value)} className="w-10 h-10 rounded-lg border-none cursor-pointer" />
                   <select 
                     value={editProjectId}
-                    onChange={e => setEditProjectId(Number(e.target.value) || '')}
+                    onChange={e => setEditProjectId(e.target.value)}
                     className="flex-1 px-3 py-1 rounded-lg border border-zinc-200 outline-none text-sm"
                   >
                     <option value="">No Project</option>
@@ -1829,7 +1923,7 @@ function ExperimentDetailModal({ id, onClose, onUpdate }: { id: number, onClose:
                 <div className="flex gap-2">
                   <select 
                     value={editArgumentId}
-                    onChange={e => setEditArgumentId(Number(e.target.value) || '')}
+                    onChange={e => setEditArgumentId(e.target.value)}
                     className="flex-1 px-3 py-1 rounded-lg border border-zinc-200 outline-none text-sm"
                     disabled={!editProjectId}
                   >
@@ -1855,7 +1949,10 @@ function ExperimentDetailModal({ id, onClose, onUpdate }: { id: number, onClose:
           </div>
           <div className="flex gap-2">
             <button 
-              onClick={handleDeleteExperiment}
+              onClick={() => setDeleteConfirm({ 
+                type: 'experiment', 
+                message: 'Are you sure you want to delete this experiment? All progress will be lost.' 
+              })}
               className="p-2 hover:bg-red-50 rounded-full transition-colors text-red-400"
               title="Delete Experiment"
             >
@@ -1965,7 +2062,11 @@ function ExperimentDetailModal({ id, onClose, onUpdate }: { id: number, onClose:
                       <ArrowRight size={18} />
                     </button>
                     <button 
-                      onClick={() => handleDeleteStep(step.id)}
+                      onClick={() => setDeleteConfirm({ 
+                        type: 'step', 
+                        id: step.id, 
+                        message: 'Delete this step?' 
+                      })}
                       className="p-2 text-zinc-300 hover:text-red-500"
                     >
                       <Trash2 size={18} />
@@ -2053,7 +2154,10 @@ function ExperimentDetailModal({ id, onClose, onUpdate }: { id: number, onClose:
                     </button>
                     {data.record && (
                       <button 
-                        onClick={handleDeleteRecordFromModal}
+                        onClick={() => setDeleteConfirm({ 
+                          type: 'record', 
+                          message: 'Are you sure you want to delete this record? The experiment progress will be kept.' 
+                        })}
                         className="p-3 rounded-xl border border-red-100 text-red-500 hover:bg-red-50 transition-all"
                         title="Delete Record"
                       >
@@ -2090,6 +2194,19 @@ function ExperimentDetailModal({ id, onClose, onUpdate }: { id: number, onClose:
             onClose={() => setSelectedStepIndex(null)}
           />
         )}
+
+        <ConfirmModal 
+          isOpen={!!deleteConfirm}
+          title="Confirm Deletion"
+          message={deleteConfirm?.message || ''}
+          onConfirm={() => {
+            if (!deleteConfirm) return;
+            if (deleteConfirm.type === 'experiment') handleDeleteExperiment();
+            if (deleteConfirm.type === 'step' && deleteConfirm.id) handleDeleteStep(deleteConfirm.id);
+            if (deleteConfirm.type === 'record') handleDeleteRecordFromModal();
+          }}
+          onCancel={() => setDeleteConfirm(null)}
+        />
       </motion.div>
     </div>
   );
@@ -2124,15 +2241,10 @@ function AIView() {
         parts: [{ text: m.content }]
       }));
 
-      const res = await fetch('/api/ai/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMessage, history })
-      });
-      const data = await res.json();
+      const response = await gemini.chatWithAssistant(userMessage, history);
       
-      if (data.response) {
-        setMessages(prev => [...prev, { role: 'model', content: data.response }]);
+      if (response) {
+        setMessages(prev => [...prev, { role: 'model', content: response }]);
       } else {
         setMessages(prev => [...prev, { role: 'model', content: "I'm sorry, I encountered an error processing your request." }]);
       }

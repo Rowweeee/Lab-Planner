@@ -1,0 +1,109 @@
+{
+  "entities": {
+    "Project": {
+      "title": "Project",
+      "description": "A research project containing multiple research points and experiments.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the project" },
+        "description": { "type": "string", "description": "Description of the project" },
+        "color": { "type": "string", "description": "Theme color for the project" },
+        "created_at": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["name"]
+    },
+    "ProjectArgument": {
+      "title": "Project Argument",
+      "description": "A research point or argument within a project.",
+      "type": "object",
+      "properties": {
+        "project_id": { "type": "string", "description": "ID of the parent project" },
+        "content": { "type": "string", "description": "The research point content" },
+        "planned_experiments": { "type": "string", "description": "JSON string of planned experiments" },
+        "created_at": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["project_id", "content"]
+    },
+    "Template": {
+      "title": "Template",
+      "description": "A protocol template for experiments.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the template" },
+        "type": { "type": "string", "description": "Category of the template" },
+        "color": { "type": "string", "description": "Theme color" },
+        "description": { "type": "string", "description": "Description" },
+        "project_id": { "type": "string", "description": "Optional associated project ID" }
+      },
+      "required": ["name", "type", "color"]
+    },
+    "TemplateStep": {
+      "title": "Template Step",
+      "description": "A step within a template.",
+      "type": "object",
+      "properties": {
+        "template_id": { "type": "string", "description": "Parent template ID" },
+        "day_offset": { "type": "integer", "description": "Day relative to start" },
+        "step_order": { "type": "integer", "description": "Order of the step" },
+        "description": { "type": "string", "description": "Step description" },
+        "duration_minutes": { "type": "integer", "description": "Estimated duration" },
+        "notes": { "type": "string", "description": "Detailed notes" }
+      },
+      "required": ["template_id", "description", "step_order"]
+    },
+    "Experiment": {
+      "title": "Experiment",
+      "description": "A specific experiment instance.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the experiment" },
+        "template_id": { "type": "string", "description": "Optional template ID" },
+        "start_date": { "type": "string", "format": "date", "description": "Start date" },
+        "status": { "type": "string", "description": "Current status (planned, active, completed)" },
+        "notes": { "type": "string", "description": "General notes" },
+        "color": { "type": "string", "description": "Theme color" },
+        "project_id": { "type": "string", "description": "Associated project ID" },
+        "argument_id": { "type": "string", "description": "Associated research point ID" },
+        "samples_json": { "type": "string", "description": "JSON string of sample tables" }
+      },
+      "required": ["name", "start_date"]
+    },
+    "ExperimentStep": {
+      "title": "Experiment Step",
+      "description": "A step within an experiment.",
+      "type": "object",
+      "properties": {
+        "experiment_id": { "type": "string", "description": "Parent experiment ID" },
+        "day_offset": { "type": "integer", "description": "Day relative to start" },
+        "step_order": { "type": "integer", "description": "Order of the step" },
+        "description": { "type": "string", "description": "Step description" },
+        "is_completed": { "type": "boolean", "description": "Completion status" },
+        "completed_at": { "type": "string", "format": "date-time", "description": "Completion timestamp" },
+        "notes": { "type": "string", "description": "Detailed notes" }
+      },
+      "required": ["experiment_id", "description", "step_order"]
+    },
+    "Record": {
+      "title": "Record",
+      "description": "The final record and AI analysis of an experiment.",
+      "type": "object",
+      "properties": {
+        "experiment_id": { "type": "string", "description": "Parent experiment ID" },
+        "purpose": { "type": "string", "description": "Purpose of the experiment" },
+        "results": { "type": "string", "description": "Observed results" },
+        "summary": { "type": "string", "description": "AI generated summary" },
+        "problems_json": { "type": "string", "description": "JSON string of problems" }
+      },
+      "required": ["experiment_id"]
+    }
+  },
+  "firestore": {
+    "/projects": { "schema": "Project", "description": "Collection of research projects" },
+    "/project_arguments": { "schema": "ProjectArgument", "description": "Collection of research points" },
+    "/templates": { "schema": "Template", "description": "Collection of experiment templates" },
+    "/template_steps": { "schema": "TemplateStep", "description": "Collection of steps for templates" },
+    "/experiments": { "schema": "Experiment", "description": "Collection of experiment instances" },
+    "/experiment_steps": { "schema": "ExperimentStep", "description": "Collection of steps for experiments" },
+    "/records": { "schema": "Record", "description": "Collection of experiment records" }
+  }
+}

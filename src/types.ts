@@ -1,5 +1,5 @@
 export interface Project {
-  id: number;
+  id: string;
   name: string;
   description: string | null;
   color: string | null;
@@ -8,25 +8,25 @@ export interface Project {
 }
 
 export interface ProjectArgument {
-  id: number;
-  project_id: number;
+  id: string;
+  project_id: string;
   content: string;
   created_at: string;
   planned_experiments?: string; // JSON string array
 }
 
 export interface Template {
-  id: number;
+  id: string;
   name: string;
   type: string;
   color: string;
   description: string;
-  project_id: number | null;
+  project_id: string | null;
 }
 
 export interface TemplateStep {
-  id: number;
-  template_id: number;
+  id: string;
+  template_id: string;
   day_offset: number;
   step_order: number;
   description: string;
@@ -35,35 +35,35 @@ export interface TemplateStep {
 }
 
 export interface Experiment {
-  id: number;
+  id: string;
   name: string;
-  template_id: number | null;
+  template_id: string | null;
   start_date: string;
   status: 'planned' | 'in_progress' | 'completed' | 'failed';
   notes: string | null;
   color: string;
   template_name?: string;
   max_day_offset?: number;
-  project_id: number | null;
-  argument_id: number | null;
+  project_id: string | null;
+  argument_id: string | null;
   project_name?: string;
   samples_json?: string;
 }
 
 export interface ExperimentStep {
-  id: number;
-  experiment_id: number;
+  id: string;
+  experiment_id: string;
   day_offset: number;
   step_order: number;
   description: string;
-  is_completed: number;
+  is_completed: boolean;
   completed_at: string | null;
   notes: string | null;
 }
 
 export interface Record {
-  id: number;
-  experiment_id: number;
+  id: string;
+  experiment_id: string;
   purpose: string | null;
   results: string | null;
   summary: string | null;

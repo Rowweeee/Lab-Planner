@@ -1,0 +1,24 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Generic validation for all collections
+    // In a real app, we'd have specific validators for each
+    match /{collectionName}/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    // Specific rules for users if we had a users collection
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+  }
+}
