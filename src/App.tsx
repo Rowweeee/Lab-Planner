@@ -21,7 +21,7 @@ import { cn } from './lib/utils';
 import { seedCommonTemplates } from './services/templateSeeder';
 import { Experiment, Template, ExperimentStep, Record as ExpRecord, Project, ProjectArgument } from './types';
 import Markdown from 'react-markdown';
-import { db, auth, signInWithGoogle } from './firebase';
+import { db, auth, signInWithGoogle, loginAnonymously, handleFirestoreError, OperationType } from './firebase';
 import { collection, onSnapshot, query, orderBy, addDoc, updateDoc, deleteDoc, doc, getDoc, setDoc, where, Timestamp, getDocs, limit } from 'firebase/firestore';
 import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
 import * as gemini from './services/geminiService';
@@ -141,11 +141,16 @@ function AppContent() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [authTimeout, setAuthTimeout] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
+  const [firestoreError, setFirestoreError] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setIsAuthReady(true);
+      if (!u) {
+        loginAnonymously().catch(console.error);
+      } else {
+        setUser(u);
+        setIsAuthReady(true);
+      }
     });
 
     const timer = setTimeout(() => {
@@ -159,22 +164,38 @@ function AppContent() {
   }, [isAuthReady]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!isAuthReady || !user) return;
 
-    // Real-time listeners
+    // Real-time listeners - now accessible to anonymous users too
     const qExperiments = query(collection(db, 'experiments'), orderBy('start_date', 'desc'));
     const unsubscribeExperiments = onSnapshot(qExperiments, (snapshot) => {
       setExperiments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)));
+    }, (error) => {
+      const err = handleFirestoreError(error, OperationType.LIST, 'experiments');
+      setFirestoreError(err.error);
     });
 
     const qTemplates = query(collection(db, 'templates'), orderBy('name', 'asc'));
     const unsubscribeTemplates = onSnapshot(qTemplates, (snapshot) => {
-      setTemplates(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)));
+      const templatesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
+      setTemplates(templatesData);
+      
+      // Auto-seed if empty
+      if (snapshot.empty && !isSeeding) {
+        setIsSeeding(true);
+        seedCommonTemplates().finally(() => setIsSeeding(false));
+      }
+    }, (error) => {
+      const err = handleFirestoreError(error, OperationType.LIST, 'templates');
+      setFirestoreError(err.error);
     });
 
     const qProjects = query(collection(db, 'projects'), orderBy('created_at', 'desc'));
     const unsubscribeProjects = onSnapshot(qProjects, (snapshot) => {
       setProjects(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)));
+    }, (error) => {
+      const err = handleFirestoreError(error, OperationType.LIST, 'projects');
+      setFirestoreError(err.error);
     });
 
     return () => {
@@ -182,7 +203,7 @@ function AppContent() {
       unsubscribeTemplates();
       unsubscribeProjects();
     };
-  }, [user]);
+  }, [isAuthReady, user]);
 
   if (!isAuthReady) {
     return (
@@ -232,68 +253,103 @@ function AppContent() {
     setIsTemplateModalOpen(true);
   };
 
-  const renderHeader = () => (
-    <div className="flex items-center justify-between mb-8">
-      <div>
-        <h1 className="text-3xl font-bold text-zinc-900 tracking-tight">Lab Planner</h1>
-        <p className="text-zinc-500 mt-1">Manage your research workflow efficiently.</p>
-      </div>
-      <div className="flex items-center gap-4">
-        {user ? (
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-3 px-3 py-1.5 bg-zinc-100 border border-zinc-200 rounded-full shadow-sm">
-              {user.photoURL ? (
-                <img src={user.photoURL} alt={user.displayName || ''} className="w-6 h-6 rounded-full border border-white shadow-sm" referrerPolicy="no-referrer" />
+  const renderHeader = () => {
+    const isAnonymous = user?.isAnonymous;
+    
+    return (
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-3xl font-bold text-zinc-900 tracking-tight">Lab Planner</h1>
+          <p className="text-zinc-500 mt-1">Manage your research workflow efficiently.</p>
+        </div>
+        <div className="flex items-center gap-4">
+          {user && !isAnonymous ? (
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-3 px-3 py-1.5 bg-zinc-100 border border-zinc-200 rounded-full shadow-sm">
+                {user.photoURL ? (
+                  <img src={user.photoURL} alt={user.displayName || ''} className="w-6 h-6 rounded-full border border-white shadow-sm" referrerPolicy="no-referrer" />
+                ) : (
+                  <div className="w-6 h-6 rounded-full bg-emerald-600 flex items-center justify-center text-[10px] text-white font-bold shadow-sm">
+                    {user.displayName?.charAt(0).toUpperCase() || 'U'}
+                  </div>
+                )}
+                <span className="text-sm font-semibold text-zinc-700">{user.displayName}</span>
+                <button 
+                  onClick={() => signOut(auth)} 
+                  className="ml-1 p-1 text-zinc-400 hover:text-zinc-900 transition-colors"
+                  title="Sign Out"
+                >
+                  <LogOut size={14} />
+                </button>
+              </div>
+              {activeTab === 'templates' ? (
+                <button 
+                  onClick={() => {
+                    setEditingTemplate(null);
+                    setIsTemplateModalOpen(true);
+                  }}
+                  className="flex items-center gap-2 bg-zinc-900 text-white px-5 py-2.5 rounded-xl hover:bg-zinc-800 transition-all shadow-md active:scale-95"
+                >
+                  <Plus size={18} />
+                  <span className="font-medium">New Template</span>
+                </button>
               ) : (
-                <div className="w-6 h-6 rounded-full bg-emerald-600 flex items-center justify-center text-[10px] text-white font-bold shadow-sm">
-                  {user.displayName?.charAt(0).toUpperCase() || 'U'}
+                <button 
+                  onClick={() => {
+                    setPreSelectedTemplateId(null);
+                    setIsAddModalOpen(true);
+                  }}
+                  className="flex items-center gap-2 bg-zinc-900 text-white px-5 py-2.5 rounded-xl hover:bg-zinc-800 transition-all shadow-md active:scale-95"
+                >
+                  <Plus size={18} />
+                  <span className="font-medium">New Experiment</span>
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-4">
+              {isAnonymous && (
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 border border-amber-100 rounded-full text-amber-700 text-xs font-bold">
+                  <Info size={14} />
+                  Guest Mode
                 </div>
               )}
-              <span className="text-sm font-semibold text-zinc-700">{user.displayName}</span>
               <button 
-                onClick={() => signOut(auth)} 
-                className="ml-1 p-1 text-zinc-400 hover:text-zinc-900 transition-colors"
-                title="Sign Out"
+                onClick={signInWithGoogle}
+                className="flex items-center gap-2 bg-white text-zinc-900 border border-zinc-200 px-5 py-2.5 rounded-xl hover:bg-zinc-50 transition-all shadow-sm active:scale-95"
               >
-                <LogOut size={14} />
+                <LogIn size={18} />
+                <span className="font-medium">Sign In with Google</span>
               </button>
+              {activeTab === 'templates' ? (
+                <button 
+                  onClick={() => {
+                    setEditingTemplate(null);
+                    setIsTemplateModalOpen(true);
+                  }}
+                  className="flex items-center gap-2 bg-zinc-900 text-white px-5 py-2.5 rounded-xl hover:bg-zinc-800 transition-all shadow-md active:scale-95"
+                >
+                  <Plus size={18} />
+                  <span className="font-medium">New Template</span>
+                </button>
+              ) : (
+                <button 
+                  onClick={() => {
+                    setPreSelectedTemplateId(null);
+                    setIsAddModalOpen(true);
+                  }}
+                  className="flex items-center gap-2 bg-zinc-900 text-white px-5 py-2.5 rounded-xl hover:bg-zinc-800 transition-all shadow-md active:scale-95"
+                >
+                  <Plus size={18} />
+                  <span className="font-medium">New Experiment</span>
+                </button>
+              )}
             </div>
-            {activeTab === 'templates' ? (
-              <button 
-                onClick={() => {
-                  setEditingTemplate(null);
-                  setIsTemplateModalOpen(true);
-                }}
-                className="flex items-center gap-2 bg-zinc-900 text-white px-5 py-2.5 rounded-xl hover:bg-zinc-800 transition-all shadow-md active:scale-95"
-              >
-                <Plus size={18} />
-                <span className="font-medium">New Template</span>
-              </button>
-            ) : (
-              <button 
-                onClick={() => {
-                  setPreSelectedTemplateId(null);
-                  setIsAddModalOpen(true);
-                }}
-                className="flex items-center gap-2 bg-zinc-900 text-white px-5 py-2.5 rounded-xl hover:bg-zinc-800 transition-all shadow-md active:scale-95"
-              >
-                <Plus size={18} />
-                <span className="font-medium">New Experiment</span>
-              </button>
-            )}
-          </div>
-        ) : (
-          <button 
-            onClick={signInWithGoogle}
-            className="flex items-center gap-2 bg-zinc-900 text-white px-5 py-2.5 rounded-xl hover:bg-zinc-800 transition-all shadow-md active:scale-95"
-          >
-            <LogIn size={18} />
-            <span className="font-medium">Sign In with Google</span>
-          </button>
-        )}
+          )}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const handleDrop = async (e: React.DragEvent, date: Date) => {
     e.preventDefault();
@@ -487,6 +543,26 @@ function AppContent() {
           </div>
           
           {renderHeader()}
+
+          {firestoreError && (
+            <div className="mb-8 p-4 bg-red-50 border border-red-100 rounded-3xl flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3 text-red-700 text-sm">
+                <XCircle size={18} />
+                <p>
+                  <span className="font-bold">Database Error:</span> {firestoreError}
+                  {firestoreError.includes('Missing or insufficient permissions') && (
+                    <span className="ml-2 opacity-80">This usually means you need to sign in or anonymous access is restricted.</span>
+                  )}
+                </p>
+              </div>
+              <button 
+                onClick={() => setFirestoreError(null)}
+                className="p-1 hover:bg-red-100 rounded-lg text-red-500"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          )}
         
         <AnimatePresence mode="wait">
           {activeTab === 'calendar' && (
@@ -2054,6 +2130,13 @@ function ExperimentDetailModal({ id, onClose }: { id: string, onClose: () => voi
 
   const handleAnalyze = async () => {
     if (!problem) return;
+    
+    if (auth.currentUser?.isAnonymous) {
+      alert("Please sign in with Google to use AI analysis features.");
+      signInWithGoogle().catch(console.error);
+      return;
+    }
+
     setIsAnalyzing(true);
     try {
       const analysis = await gemini.analyzeExperimentProblem(problem, data?.experiment.name || "");
@@ -2409,6 +2492,7 @@ function AIView() {
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const isAnonymous = auth.currentUser?.isAnonymous;
 
   const scrollToBottom = () => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -2421,6 +2505,12 @@ function AIView() {
   const handleSendMessage = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!input.trim() || isProcessing) return;
+
+    if (isAnonymous) {
+      alert("Please sign in with Google to chat with the AI assistant.");
+      signInWithGoogle().catch(console.error);
+      return;
+    }
 
     const userMessage = input.trim();
     setInput('');
@@ -2485,7 +2575,23 @@ function AIView() {
 
       <div className="flex-1 flex gap-6 overflow-hidden">
         {/* Chat Section */}
-        <div className="flex-1 bg-white rounded-3xl border border-zinc-200 shadow-sm flex flex-col overflow-hidden">
+        <div className="flex-1 bg-white rounded-3xl border border-zinc-200 shadow-sm flex flex-col overflow-hidden relative">
+          {isAnonymous && (
+            <div className="absolute inset-0 z-20 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center p-8 text-center">
+              <div className="bg-zinc-900 text-white p-4 rounded-3xl shadow-xl mb-6">
+                <BrainCircuit size={48} />
+              </div>
+              <h3 className="text-xl font-bold text-zinc-900 mb-2">Google Login Required</h3>
+              <p className="text-zinc-500 mb-8 max-w-xs">To prevent abuse and provide personalized research assistance, the AI assistant requires a Google account.</p>
+              <button 
+                onClick={() => signInWithGoogle()}
+                className="bg-zinc-900 text-white px-8 py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-lg flex items-center gap-2"
+              >
+                <LogIn size={20} />
+                Sign In with Google
+              </button>
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
             {messages.length === 0 && (
               <div className="h-full flex flex-col items-center justify-center text-center p-8 opacity-40">

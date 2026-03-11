@@ -10,13 +10,71 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // Generic validation for all collections
-    // In a real app, we'd have specific validators for each
-    match /{collectionName}/{docId} {
+    function hasOnlyAllowedFields(data, allowedFields) {
+      return data.keys().hasOnly(allowedFields);
+    }
+
+    // Domain Validators
+    function isValidExperiment(data) {
+      return hasOnlyAllowedFields(data, ['name', 'template_id', 'start_date', 'color', 'project_id', 'argument_id', 'status', 'samples_json']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.start_date is string &&
+             data.color is string && data.color.size() < 20;
+    }
+
+    function isValidStep(data) {
+      return data.description is string && data.description.size() > 0 && data.description.size() < 500 &&
+             data.day_offset is number;
+    }
+
+    function isValidTemplate(data) {
+      return hasOnlyAllowedFields(data, ['name', 'type', 'color', 'description', 'project_id', 'created_at']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.type is string &&
+             data.color is string && data.color.size() < 20;
+    }
+
+    // Rules for collections
+    match /experiments/{docId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && isValidExperiment(request.resource.data);
+      allow delete: if isAuthenticated();
+    }
+
+    match /experiment_steps/{docId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && isValidStep(request.resource.data);
+      allow delete: if isAuthenticated();
+    }
+
+    match /templates/{docId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && isValidTemplate(request.resource.data);
+      allow delete: if isAuthenticated();
+    }
+
+    match /template_steps/{docId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && isValidStep(request.resource.data);
+      allow delete: if isAuthenticated();
+    }
+
+    match /projects/{docId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && request.resource.data.name is string && request.resource.data.name.size() < 100;
+      allow delete: if isAuthenticated();
+    }
+
+    match /project_arguments/{docId} {
       allow read, write: if isAuthenticated();
     }
+
+    match /records/{docId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && request.resource.data.results is string && request.resource.data.results.size() < 5000;
+      allow delete: if isAuthenticated();
+    }
     
-    // Specific rules for users if we had a users collection
     match /users/{userId} {
       allow read, write: if isOwner(userId);
     }
