@@ -122,6 +122,27 @@ export default function App() {
     };
   }, [user]);
 
+  if (!isAuthReady) {
+    return (
+      <div className="h-screen w-screen flex flex-col items-center justify-center bg-zinc-50 gap-4">
+        <motion.div
+          animate={{ 
+            rotate: [0, 10, -10, 10, 0],
+            scale: [1, 1.1, 1]
+          }}
+          transition={{ duration: 2, repeat: Infinity }}
+          className="w-16 h-16 bg-zinc-900 rounded-3xl flex items-center justify-center text-white shadow-2xl"
+        >
+          <FlaskConical size={32} />
+        </motion.div>
+        <div className="flex flex-col items-center gap-1">
+          <p className="text-zinc-900 font-bold tracking-tight">Lab Planner</p>
+          <p className="text-zinc-400 text-xs font-medium animate-pulse">Initializing research environment...</p>
+        </div>
+      </div>
+    );
+  }
+
   const handleUseTemplate = (id: string) => {
     setPreSelectedTemplateId(id);
     setIsAddModalOpen(true);
@@ -141,15 +162,21 @@ export default function App() {
       <div className="flex items-center gap-4">
         {user ? (
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-white border border-zinc-200 rounded-xl shadow-sm">
+            <div className="flex items-center gap-3 px-3 py-1.5 bg-zinc-100 border border-zinc-200 rounded-full shadow-sm">
               {user.photoURL ? (
-                <img src={user.photoURL} alt={user.displayName || ''} className="w-6 h-6 rounded-full" referrerPolicy="no-referrer" />
+                <img src={user.photoURL} alt={user.displayName || ''} className="w-6 h-6 rounded-full border border-white shadow-sm" referrerPolicy="no-referrer" />
               ) : (
-                <User size={16} className="text-zinc-400" />
+                <div className="w-6 h-6 rounded-full bg-emerald-600 flex items-center justify-center text-[10px] text-white font-bold shadow-sm">
+                  {user.displayName?.charAt(0).toUpperCase() || 'U'}
+                </div>
               )}
-              <span className="text-sm font-medium text-zinc-700">{user.displayName}</span>
-              <button onClick={() => signOut(auth)} className="ml-2 p-1 text-zinc-400 hover:text-red-500 transition-colors">
-                <LogOut size={16} />
+              <span className="text-sm font-semibold text-zinc-700">{user.displayName}</span>
+              <button 
+                onClick={() => signOut(auth)} 
+                className="ml-1 p-1 text-zinc-400 hover:text-zinc-900 transition-colors"
+                title="Sign Out"
+              >
+                <LogOut size={14} />
               </button>
             </div>
             {activeTab === 'templates' ? (
@@ -365,12 +392,19 @@ export default function App() {
       <main className="flex-1 overflow-auto bg-zinc-50/50">
         <div className="p-4 lg:p-12 max-w-7xl mx-auto">
           <div className="lg:hidden flex items-center justify-between mb-6">
-            <button onClick={() => setIsSidebarOpen(true)} className="p-2 hover:bg-zinc-200 rounded-xl bg-white border border-zinc-200 shadow-sm">
+            <button 
+              onClick={() => setIsSidebarOpen(true)} 
+              className="p-2 hover:bg-zinc-200 rounded-xl bg-white border border-zinc-200 shadow-sm transition-all active:scale-95"
+            >
               <Menu size={24} />
             </button>
-            <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center text-white shadow-md">
+            <button 
+              onClick={() => setActiveTab('ai')}
+              className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center text-white shadow-md hover:bg-zinc-800 transition-all active:scale-95"
+              title="Open AI Assistant"
+            >
               <FlaskConical size={20} />
-            </div>
+            </button>
           </div>
           
           {renderHeader()}
