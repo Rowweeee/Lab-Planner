@@ -3,17 +3,37 @@ import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged } from
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
-// Validate config to prevent white screen crashes
-if (!firebaseConfig || !firebaseConfig.projectId || !firebaseConfig.apiKey) {
-  console.error("Firebase configuration is missing or incomplete. Please check firebase-applet-config.json");
+let app;
+let auth: any;
+let db: any;
+let googleProvider: any;
+
+try {
+  // Validate config to prevent white screen crashes
+  if (!firebaseConfig || !firebaseConfig.projectId || !firebaseConfig.apiKey) {
+    throw new Error("Firebase configuration is missing or incomplete. Please check firebase-applet-config.json");
+  }
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+  googleProvider = new GoogleAuthProvider();
+} catch (error) {
+  console.error("Firebase Initialization Error:", error);
+  // Provide dummy objects to prevent crashes on import
+  auth = { currentUser: null, onAuthStateChanged: () => () => {} };
+  db = {};
+  googleProvider = {};
 }
 
-const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const googleProvider = new GoogleAuthProvider();
+export { auth, db, googleProvider };
 
-export const signInWithGoogle = () => signInWithPopup(auth, googleProvider);
+export const signInWithGoogle = () => {
+  if (auth && typeof auth.signInWithPopup === 'function') {
+    return signInWithPopup(auth, googleProvider);
+  }
+  console.error("Auth not initialized correctly");
+  return Promise.reject("Auth not initialized");
+};
 
 // Connection test as per guidelines
 async function testConnection() {

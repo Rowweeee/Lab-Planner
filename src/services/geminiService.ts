@@ -2,7 +2,12 @@ import { GoogleGenAI, Type } from "@google/genai";
 
 const getApiKey = () => {
   try {
-    return process.env.GEMINI_API_KEY || "";
+    // @ts-ignore
+    if (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) {
+      // @ts-ignore
+      return process.env.GEMINI_API_KEY;
+    }
+    return "";
   } catch (e) {
     return "";
   }
