@@ -8,9 +8,17 @@ const getApiKey = () => {
   }
 };
 
-const ai = new GoogleGenAI({ apiKey: getApiKey() });
+let aiInstance: GoogleGenAI | null = null;
+
+const getAI = () => {
+  if (!aiInstance) {
+    aiInstance = new GoogleGenAI({ apiKey: getApiKey() });
+  }
+  return aiInstance;
+};
 
 export async function analyzeExperimentProblem(problem: string, context: string) {
+  const ai = getAI();
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
     contents: `As a lab assistant, analyze this experiment problem:
@@ -26,6 +34,7 @@ export async function analyzeExperimentProblem(problem: string, context: string)
 }
 
 export async function generateExperimentSummary(experimentData: any) {
+  const ai = getAI();
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
     contents: `Summarize this experiment:
@@ -40,6 +49,7 @@ export async function generateExperimentSummary(experimentData: any) {
 }
 
 export async function chatWithAssistant(message: string, history: { role: 'user' | 'model', parts: { text: string }[] }[], context?: string) {
+  const ai = getAI();
   const chat = ai.chats.create({
     model: "gemini-3-flash-preview",
     config: {

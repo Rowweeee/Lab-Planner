@@ -27,6 +27,50 @@ import * as gemini from './services/geminiService';
 
 // --- Components ---
 
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean, error: Error | null }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="h-screen w-screen flex flex-col items-center justify-center bg-zinc-50 p-6 text-center">
+          <div className="w-16 h-16 bg-red-100 rounded-2xl flex items-center justify-center text-red-600 mb-6">
+            <XCircle size={32} />
+          </div>
+          <h1 className="text-2xl font-bold text-zinc-900 mb-2">Something went wrong</h1>
+          <p className="text-zinc-500 max-w-md mb-8">
+            The application encountered an unexpected error. This might be due to missing configuration or a temporary connection issue.
+          </p>
+          <div className="bg-zinc-100 p-4 rounded-xl text-left overflow-auto max-w-xl w-full mb-8">
+            <p className="text-xs font-mono text-zinc-600 whitespace-pre-wrap">
+              {this.state.error?.toString()}
+            </p>
+          </div>
+          <button 
+            onClick={() => window.location.reload()}
+            className="px-6 py-3 bg-zinc-900 text-white rounded-xl font-medium hover:bg-zinc-800 transition-all shadow-lg"
+          >
+            Reload Application
+          </button>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 const ConfirmModal = ({ isOpen, title, message, onConfirm, onCancel }: { isOpen: boolean, title: string, message: string, onConfirm: () => void, onCancel: () => void }) => {
   if (!isOpen) return null;
   return (
@@ -71,6 +115,14 @@ const SidebarItem = ({ icon: Icon, label, active, onClick }: { icon: any, label:
 );
 
 export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
+  );
+}
+
+function AppContent() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [activeTab, setActiveTab] = useState<'calendar' | 'templates' | 'projects' | 'records' | 'ai'>('calendar');
   const [experiments, setExperiments] = useState<Experiment[]>([]);
@@ -86,6 +138,7 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [authTimeout, setAuthTimeout] = useState(false);
 
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
@@ -93,8 +146,15 @@ export default function App() {
       setIsAuthReady(true);
     });
 
-    return () => unsubscribeAuth();
-  }, []);
+    const timer = setTimeout(() => {
+      if (!isAuthReady) setAuthTimeout(true);
+    }, 8000);
+
+    return () => {
+      unsubscribeAuth();
+      clearTimeout(timer);
+    };
+  }, [isAuthReady]);
 
   useEffect(() => {
     if (!user) return;
@@ -124,7 +184,7 @@ export default function App() {
 
   if (!isAuthReady) {
     return (
-      <div className="h-screen w-screen flex flex-col items-center justify-center bg-zinc-50 gap-4">
+      <div className="h-screen w-screen flex flex-col items-center justify-center bg-zinc-50 gap-4 p-6 text-center">
         <motion.div
           animate={{ 
             rotate: [0, 10, -10, 10, 0],
@@ -139,6 +199,23 @@ export default function App() {
           <p className="text-zinc-900 font-bold tracking-tight">Lab Planner</p>
           <p className="text-zinc-400 text-xs font-medium animate-pulse">Initializing research environment...</p>
         </div>
+        {authTimeout && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="mt-8 max-w-xs"
+          >
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              This is taking longer than usual. Please check your internet connection or verify that your Firebase configuration is correct.
+            </p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="mt-4 text-xs font-bold text-zinc-900 underline"
+            >
+              Try Reloading
+            </button>
+          </motion.div>
+        )}
       </div>
     );
   }
@@ -654,6 +731,7 @@ function ProjectDetailView({ projectId, onBack, onExperimentClick }: { projectId
   const [loading, setLoading] = useState(true);
   const [editingArgId, setEditingArgId] = useState<string | null>(null);
   const [newPlannedExp, setNewPlannedExp] = useState('');
+  const [isAddArgModalOpen, setIsAddArgModalOpen] = useState(false);
 
   useEffect(() => {
     if (!projectId) return;
@@ -712,6 +790,12 @@ function ProjectDetailView({ projectId, onBack, onExperimentClick }: { projectId
     await updateDoc(doc(db, 'project_arguments', argId), { planned_experiments: JSON.stringify(updated) });
   };
 
+  const handleDeleteArg = async (argId: string) => {
+    if (window.confirm('Are you sure you want to delete this research point?')) {
+      await deleteDoc(doc(db, 'project_arguments', argId));
+    }
+  };
+
   if (loading || !project) return <div className="p-12 text-center text-zinc-400">Loading project details...</div>;
 
   return (
@@ -733,11 +817,18 @@ function ProjectDetailView({ projectId, onBack, onExperimentClick }: { projectId
               <BrainCircuit className="text-indigo-600" size={24} />
               Logic Chain & Research Points (逻辑链与论证观点)
             </h3>
+            <button 
+              onClick={() => setIsAddArgModalOpen(true)}
+              className="flex items-center gap-2 text-indigo-600 hover:text-indigo-800 font-bold text-sm"
+            >
+              <Plus size={18} />
+              Add Research Point
+            </button>
           </div>
           
           <div className="space-y-6">
             {arguments_.map((arg, idx) => (
-              <div key={arg.id} className="bg-white rounded-3xl border border-zinc-200 shadow-sm overflow-hidden">
+              <div key={arg.id} className="bg-white rounded-3xl border border-zinc-200 shadow-sm overflow-hidden group/main">
                 <div className="p-6 border-b border-zinc-100 bg-zinc-50/50 flex items-start gap-4">
                   <div className="w-8 h-8 rounded-full bg-zinc-900 text-white flex items-center justify-center font-bold text-sm shrink-0">
                     {idx + 1}
@@ -745,6 +836,13 @@ function ProjectDetailView({ projectId, onBack, onExperimentClick }: { projectId
                   <div className="flex-1">
                     <p className="text-lg font-medium text-zinc-800 leading-relaxed">{arg.content}</p>
                   </div>
+                  <button 
+                    onClick={() => handleDeleteArg(arg.id)}
+                    className="p-2 text-zinc-300 hover:text-red-500 opacity-0 group-hover/main:opacity-100 transition-all"
+                    title="Delete Research Point"
+                  >
+                    <Trash2 size={18} />
+                  </button>
                 </div>
                 
                 <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -838,12 +936,19 @@ function ProjectDetailView({ projectId, onBack, onExperimentClick }: { projectId
             
             {arguments_.length === 0 && (
               <div className="p-12 bg-white rounded-3xl border border-dashed border-zinc-200 text-center text-zinc-400">
-                No research points defined yet. Add them in the project card view.
+                No research points defined yet. Click "Add Research Point" above to start.
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {isAddArgModalOpen && (
+        <AddResearchPointModal 
+          projectId={projectId} 
+          onClose={() => setIsAddArgModalOpen(false)} 
+        />
+      )}
     </div>
   );
 }
@@ -1105,7 +1210,13 @@ function ProjectArgumentsList({ projectId }: { projectId: string }) {
     <div className="space-y-3 mt-4 pt-4 border-t border-zinc-100">
       <div className="flex justify-between items-center">
         <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Research Points</h4>
-        <button onClick={() => setIsAdding(true)} className="text-zinc-400 hover:text-zinc-900">
+        <button 
+          onClick={(e) => {
+            e.stopPropagation();
+            setIsAdding(true);
+          }} 
+          className="text-zinc-400 hover:text-zinc-900"
+        >
           <Plus size={14} />
         </button>
       </div>
@@ -1113,13 +1224,19 @@ function ProjectArgumentsList({ projectId }: { projectId: string }) {
         {arguments_.map(arg => (
           <div key={arg.id} className="flex justify-between items-start gap-2 bg-zinc-50 p-2 rounded-lg group/arg">
             <p className="text-xs text-zinc-600 leading-relaxed">{arg.content}</p>
-            <button onClick={() => handleDelete(arg.id)} className="text-zinc-300 hover:text-red-500 opacity-0 group-hover/arg:opacity-100">
+            <button 
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDelete(arg.id);
+              }} 
+              className="text-zinc-300 hover:text-red-500 opacity-0 group-hover/arg:opacity-100"
+            >
               <Plus size={12} className="rotate-45" />
             </button>
           </div>
         ))}
         {isAdding && (
-          <div className="space-y-2">
+          <div className="space-y-2" onClick={(e) => e.stopPropagation()}>
             <textarea 
               autoFocus
               value={newArg}

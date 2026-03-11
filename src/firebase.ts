@@ -3,6 +3,11 @@ import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged } from
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
+// Validate config to prevent white screen crashes
+if (!firebaseConfig || !firebaseConfig.projectId || !firebaseConfig.apiKey) {
+  console.error("Firebase configuration is missing or incomplete. Please check firebase-applet-config.json");
+}
+
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
