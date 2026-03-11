@@ -15,9 +15,10 @@ import {
   eachDayOfInterval,
   parseISO
 } from 'date-fns';
-import { ChevronLeft, ChevronRight, Plus, FlaskConical, Beaker, ClipboardList, BrainCircuit, Settings, Info, ArrowRight, FolderKanban, BookOpen, Trash2, Edit3, CheckCircle2, XCircle, Menu, X, LogIn, LogOut, User } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, FlaskConical, Beaker, ClipboardList, BrainCircuit, Settings, Info, ArrowRight, FolderKanban, BookOpen, Trash2, Edit3, CheckCircle2, XCircle, Menu, X, LogIn, LogOut, User, Sparkles, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
 import { cn } from './lib/utils';
+import { seedCommonTemplates } from './services/templateSeeder';
 import { Experiment, Template, ExperimentStep, Record as ExpRecord, Project, ProjectArgument } from './types';
 import Markdown from 'react-markdown';
 import { db, auth, signInWithGoogle } from './firebase';
@@ -139,6 +140,7 @@ function AppContent() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [authTimeout, setAuthTimeout] = useState(false);
+  const [isSeeding, setIsSeeding] = useState(false);
 
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
@@ -504,10 +506,48 @@ function AppContent() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+              className="space-y-6"
             >
-              {templates.map(template => (
-                <div key={template.id} className="bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm hover:shadow-md transition-all group relative">
+              {templates.length === 0 && (
+                <div className="bg-white p-12 rounded-3xl border border-zinc-200 text-center">
+                  <Beaker size={48} className="mx-auto mb-4 text-zinc-300" />
+                  <h3 className="text-xl font-bold mb-2">No Templates Yet</h3>
+                  <p className="text-zinc-500 mb-8 max-w-md mx-auto">Create your own experiment templates or start with our pre-configured common lab protocols.</p>
+                  <button 
+                    disabled={isSeeding}
+                    onClick={async () => {
+                      setIsSeeding(true);
+                      await seedCommonTemplates();
+                      setIsSeeding(false);
+                    }}
+                    className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 flex items-center gap-2 mx-auto disabled:opacity-50"
+                  >
+                    {isSeeding ? <Loader2 size={20} className="animate-spin" /> : <Sparkles size={20} />}
+                    {isSeeding ? 'Importing...' : 'Import Common Templates'}
+                  </button>
+                </div>
+              )}
+              
+              {templates.length > 0 && (
+                <div className="flex justify-end">
+                  <button 
+                    disabled={isSeeding}
+                    onClick={async () => {
+                      setIsSeeding(true);
+                      await seedCommonTemplates();
+                      setIsSeeding(false);
+                    }}
+                    className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1.5 bg-indigo-50 px-3 py-1.5 rounded-lg transition-all disabled:opacity-50"
+                  >
+                    {isSeeding ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                    {isSeeding ? 'Importing...' : 'Import Common Templates'}
+                  </button>
+                </div>
+              )}
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {templates.map(template => (
+                  <div key={template.id} className="bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm hover:shadow-md transition-all group relative">
                   <button 
                     onClick={() => handleEditTemplate(template)}
                     className="absolute top-4 right-4 p-2 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-all opacity-0 group-hover:opacity-100"
@@ -532,8 +572,9 @@ function AppContent() {
                   </button>
                 </div>
               ))}
-            </motion.div>
-          )}
+            </div>
+          </motion.div>
+        )}
 
           {activeTab === 'projects' && (
             <motion.div
